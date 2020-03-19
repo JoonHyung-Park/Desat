@@ -67,7 +67,7 @@ def main(args):
         avg_loss /= len(train_loader)
         print("---------------------")
         print("Train Epoch {} Avg_loss: {:.6f} ".format(epoch+1, avg_loss))
-        print("Train  Epoch {} Avg_AUC: {:.6f} ".format(epoch+1, avg_AUC))
+        print("Train Epoch {} Avg_AUC: {:.6f} ".format(epoch+1, avg_AUC))
 
 
 
