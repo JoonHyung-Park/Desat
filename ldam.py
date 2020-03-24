@@ -1,7 +1,7 @@
 import argparse
 import sys
 from data_load import *
-from utils_py import choose_and_cut, get_auc, get_auc_list
+from utils_py import choose_and_cut, get_auc, get_auc_softmax
 from model import *
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -18,9 +18,7 @@ def main(args):
     feature_cut = True
 
     model = MLP(feature_num,16).to(device)
-    #optimizer = torch.optim.Adam(model.parameters(), lr = 0.002) #, momentum = 0.9)
     optimizer = torch.optim.SGD(model.parameters(), lr = 0.0008, momentum = 0.9, weight_decay = 2e-4)
-    #criterion = nn.BCEWithLogitsLoss()#(pos_weight = torch.FloatTensor([(2869/187)]).to(device) )
     criterion = LDAMLoss(cls_num_list, max_m = 0.5, s=30)
     '''
     def init_weights(m):
@@ -46,21 +44,17 @@ def main(args):
             for batch_idx, (data,_,labels) in enumerate(train_loader):
                 data,_ = choose_and_cut(data,cut=feature_cut)
                 data = torch.from_numpy(data).float()
-                labels = labels.argmax(axis = 1, keepdim = True).float()
-                print(labels.shape)
+                auc_labels = labels
+                labels = labels.argmax(axis = 1, keepdim =False ).float()
                 data, labels = data.to(device), labels.to(device)
                 optimizer.zero_grad()
                 output = model(data)
-                #loss = binary_cross_entropy_with_logits(output, labels)
                 loss = criterion(output,labels)
-                if(epoch == 0):
-                    pass
-                    #print("Initial Loss: ", loss.item())
                 loss.backward()
                 optimizer.step()
 
                 avg_loss += loss.item()
-                avg_AUC += get_auc(output,labels)
+                avg_AUC += get_auc_softmax(output,auc_labels)
                 '''
                 if batch_idx % log_interval == 0:
                     print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
@@ -79,13 +73,14 @@ def main(args):
                 for val_data, _, val_labels in val_loader:
                     val_data,_ = choose_and_cut(val_data, cut = feature_cut)
                     val_data = torch.from_numpy(val_data).float()
-                    val_labels = val_labels.argmax(axis = 1, keepdim = True).float()
+                    auc_labels = val_labels
+                    val_labels = val_labels.argmax(axis = 1, keepdim = False).float()
                     val_data, val_labels = val_data.to(device), val_labels.to(device)
 
                     output = model(val_data)
                     loss = criterion(output, val_labels)
                     val_loss += loss.item()
-                    val_auc = get_auc(output, val_labels)
+                    val_auc = get_auc_softmax(output, auc_labels)
                 val_loss /= len(val_loader)
                 print("Validation Loss: {:.6f}".format(val_loss))
                 print("Validation AUC: {:.6f}".format(val_auc))
@@ -102,14 +97,14 @@ def main(args):
         with torch.no_grad():
             avg_AUC = 0
             for test_data, _, test_labels in test_loader:
-                print(test_labels)
                 test_data,_ = choose_and_cut(test_data, cut = feature_cut)
                 test_data = torch.from_numpy(test_data).float()
-                test_labels = test_labels.argmax(axis = 1, keepdim = True).float()
+                auc_labels = test_labels
+                test_labels = test_labels.argmax(axis = 1, keepdim = False).float()
                 test_data, test_labels = test_data.to(device), test_labels.to(device)
 
                 output = model(test_data)
-                avg_AUC += get_auc(output,test_labels)
+                avg_AUC += get_auc(output,auc_labels)
 
             avg_AUC /= len(test_loader)
             print("Test Avg_AUC: {:.6f} ".format(avg_AUC))

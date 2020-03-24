@@ -11,9 +11,14 @@ from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import train_test_split
 
+from imblearn.over_sampling import SMOTE, BorderlineSMOTE, SVMSMOTE
+from imblearn.combine import *
+
 def normalize(X, exist=None, mean=None, std=None):
-    rest_ind = [0, 4, 21, 22, 23, 27, 28, 29, 30, 32, 33, 34, 35, 36, 37, 38,
-            39, 40, 41, 42, 43, 44, 45, 46, 55, 59, 60] # exclude ASA, gender
+    #rest_ind = [0, 4, 21, 22, 23, 27, 28, 29, 30, 32, 33, 34, 35, 36, 37, 38,
+            #39, 40, 41, 42, 43, 44, 45, 46, 55, 59, 60] # exclude ASA, gender
+    rest_ind = [4, 21, 22, 27, 28, 29, 30, 32, 33, 34, 35, 36, 37, 38,
+            39, 40, 41, 43, 44, 45, 46, 55, 59, 60]
     X = np.copy(X)
     Y = X[:, rest_ind]
     if exist is not None:
@@ -33,7 +38,7 @@ def from_numpy(*args):
     return (torch.from_numpy(arg) for arg in args)
 
 def data_load_mysplit(n_splits=3, all_set=None,
-        random_state=123, ensemble=False, oversampling='borderline_smote'):
+        random_state=123, ensemble=False, oversampling='none'):
     '''
         oversampling : 'none', 'smote'
     '''
@@ -52,75 +57,58 @@ def data_load_mysplit(n_splits=3, all_set=None,
     # Standard normalization
     all_data, mean, std = normalize(all_data, all_exist)
 
+    # Split data into train : val : test = 5 : 2 : 3
     train_data, test_data, train_exist, test_exist, train_label, test_label, train_split, _ = \
         train_test_split(all_data, all_exist, all_label, split_criteria, test_size=0.3,
             random_state=123, shuffle=True, stratify=split_criteria)
 
 
-    # Split data into k fold for k-fold cross validation
-    kf = StratifiedKFold(n_splits, shuffle=True, random_state=random_state) # fixed random state
+    split_criteria = np.where(train_data[:, 48] > 2.5, 1, 0)
+    train_data, val_data, train_exist, val_exist, train_label, val_label, train_split, _ = \
+        train_test_split(train_data,train_exist,train_label,split_criteria, test_size =0.2/(0.5+0.2),
+            random_state=123, shuffle=True, stratify=split_criteria)
+
+    if oversampling in ['borderline_smote', 'svm_smote','smoteenn', 'smotetomek','smote']:
+        if oversampling == 'borderline_smote':
+            smote = BorderlineSMOTE(random_state=random_state)
+        elif oversampling == 'svm_smote':
+            smote = SVMSMOTE(random_state=random_state)
+        elif oversampling == 'smoteenn':
+            smote = SMOTEENN(random_state=random_state)
+        elif oversampling == 'smotetomek':
+            smote = SMOTETomek(random_state=random_state)
+        elif oversampling == 'smote':
+            smote = SMOTE(random_state=random_state)
 
 
-    kf_gen = kf.split(train_data, train_split) #ASA score
+            #    print("train data before shape", train_data.shape, train_label.shape, type(train_data))
+        X, y = smote.fit_resample(train_data, train_label.argmax(axis=1))
+        y = np.array([[1,0],[0,1]])[y]
+        exist = np.ones_like(X)
+        train_data, train_exist, train_label = (X, exist, y)
+    #   print("train data after shape", train_data.shape, train_label.shape, type(train_data))
 
-    def k_folds():
-        for train_ind, val_ind in kf_gen:
-            fold_train = (train_data[train_ind], train_exist[train_ind],
-                    train_label[train_ind])
-            fold_val = (train_data[val_ind], train_exist[val_ind],
-                train_label[val_ind])
-            fold_val = TensorDataset(*from_numpy(*fold_val))
-
-            if oversampling in ['borderline_smote', 'svm_smote', 'smotenc']:
-                from imblearn.over_sampling import SMOTENC, BorderlineSMOTE, SVMSMOTE
-                if oversampling == 'borderline_smote':
-                    smote = BorderlineSMOTE(random_state=random_state)
-                elif oversampling == 'svm_smote':
-                    smote = SVMSMOTE(random_state=random_state)
-                elif oversampling == 'smotenc':
-                    categorical_features = [2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
-                            20, 24, 25, 26, 31, 47, 49, 50, 51, 52, 53, 54, 56, 57, 58] + [1, 48]
-                    smote = SMOTENC(categorical_features=categorical_features,
-                            random_state=random_state, sampling_strategy='auto', neighbors=5,
-                            )
-                #print(oversampling)
-                X, y = smote.fit_resample(fold_train[0], fold_train[2].argmax(axis=1))
-                y = np.array([[1, 0],[0, 1]])[y]
-                exist = np.ones_like(X)
-
-                fold_train = (X, exist, y)
-
-            pos_weight =  fold_train[2].shape[0] / np.sum(fold_train[2][:, 1]) - 1
-
-            '''
-            if ensemble:
-                pos_ind, = np.where(fold_train[-1][:, 0] == 0)
-                neg_ind, = np.where(fold_train[-1][:, 0] == 1)
-
-                pos_data, neg_data = fold_train[0][pos_ind], fold_train[0][neg_ind]
-                pos_exist, neg_exist = fold_train[1][pos_ind], fold_train[1][neg_ind]
-
-                kf = KFold(n_splits=int(pos_weight / 1), shuffle=True,
-                            random_state=random_state)
-
-                splited_neg = [(neg_data[ind], neg_exist[ind]) for _, ind in
-                        kf.split(neg_data)]
-                ensemble_datatemp = \
-                    [TensorDataset(*from_numpy(
-                      np.concatenate((pos_data, neg_data), axis=0),
-                      np.concatenate((pos_exist, neg_exist), axis=0),
-                      np.concatenate((np.tile([[0, 1]], (len(pos_data), 1)),
-                                      np.tile([[1, 0]], (len(neg_data),
-                                          1))),axis=0))) \
-                        for neg_data, neg_exist in splited_neg]
-                fold_train = ensemble_datatemp
-                pos_weight = 1\
-                '''
-            fold_train = TensorDataset(*from_numpy(*fold_train))
-
-            yield fold_train, fold_val, pos_weight
-
+    print(train_label.shape[0],np.sum(train_label[:,0]),np.sum(train_label[:, 1]))
+    print(val_label.shape[0],np.sum(val_label[:,0]),np.sum(val_label[:, 1]))
+    print(test_label.shape[0],np.sum(test_label[:,0]),np.sum(test_label[:, 1]))
+    train_pos_weight = train_label.shape[0] / np.sum(train_label[:, 1]) - 1
+    val_pos_weight = val_label.shape[0] / np.sum(val_label[:, 1]) - 1
+    test_pos_weight = test_label.shape[0] / np.sum(test_label[:, 1]) - 1
+    print("train_pos_weight: ",train_pos_weight)
+    print("val_pos_weight: ",val_pos_weight)
+    print("test_pos_weight: ",test_pos_weight)
+    print("train_data/exist/label shape", train_data.shape, train_exist.shape, train_label.shape)
     print("test_data/exist/label shape", test_data.shape, test_exist.shape, test_label.shape)
+    print("val_data/exist/label shape", val_data.shape, val_exist.shape, val_label.shape)
+    train_set = TensorDataset(torch.from_numpy(train_data),
+                torch.from_numpy(train_exist), torch.from_numpy(train_label))
+
+    val_set = TensorDataset(torch.from_numpy(val_data),
+                torch.from_numpy(val_exist), torch.from_numpy(val_label))
+
     test_set = TensorDataset(torch.from_numpy(test_data),
             torch.from_numpy(test_exist), torch.from_numpy(test_label))
-    return k_folds(), test_set, train_data.shape[1], all_set
+
+    return train_set,val_set, test_set, train_data.shape[1], all_set
+
+
