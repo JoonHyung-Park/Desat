@@ -12,6 +12,7 @@ from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import train_test_split
 
 from imblearn.over_sampling import SMOTE, BorderlineSMOTE, SVMSMOTE
+from imblearn.under_sampling import *
 from imblearn.combine import *
 
 def normalize(X, exist=None, mean=None, std=None):
@@ -38,7 +39,7 @@ def from_numpy(*args):
     return (torch.from_numpy(arg) for arg in args)
 
 def data_load_mysplit(n_splits=3, all_set=None,
-        random_state=123, ensemble=False, oversampling='none'):
+        random_state=123, ensemble=False, oversampling='ncr'):
     '''
         oversampling : 'none', 'smote'
     '''
@@ -53,22 +54,28 @@ def data_load_mysplit(n_splits=3, all_set=None,
 
     all_data[all_data == 99899] = 0
 
+    sn_idx = [0,23,48,49,42,20,53,54]
+    K = np.sum(all_data[:,sn_idx] != 99899) / 8.0
+    for idx in sn_idx:
+        exist_num = np.sum(all_data[:,idx] != 99899 )
+        #all_data[:,idx] =  K* (all_data[:,idx]/float(exist_num))
+
     split_criteria = np.where(all_data[:, 48] > 2.5, 1, 0)
     # Standard normalization
     all_data, mean, std = normalize(all_data, all_exist)
 
-    # Split data into train : val : test = 5 : 2 : 3
+        # Split data into train : val : test = 5 : 2 : 3
     train_data, test_data, train_exist, test_exist, train_label, test_label, train_split, _ = \
         train_test_split(all_data, all_exist, all_label, split_criteria, test_size=0.3,
-            random_state=123, shuffle=True, stratify=split_criteria)
+            random_state=random_state, shuffle=True, stratify=split_criteria)
 
 
     split_criteria = np.where(train_data[:, 48] > 2.5, 1, 0)
     train_data, val_data, train_exist, val_exist, train_label, val_label, train_split, _ = \
         train_test_split(train_data,train_exist,train_label,split_criteria, test_size =0.2/(0.5+0.2),
-            random_state=123, shuffle=True, stratify=split_criteria)
+            random_state=random_state, shuffle=True, stratify=split_criteria)
 
-    if oversampling in ['borderline_smote', 'svm_smote','smoteenn', 'smotetomek','smote']:
+    if oversampling in ['borderline_smote', 'svm_smote','smoteenn', 'smotetomek','smote','ncr']:
         if oversampling == 'borderline_smote':
             smote = BorderlineSMOTE(random_state=random_state)
         elif oversampling == 'svm_smote':
@@ -79,6 +86,8 @@ def data_load_mysplit(n_splits=3, all_set=None,
             smote = SMOTETomek(random_state=random_state)
         elif oversampling == 'smote':
             smote = SMOTE(random_state=random_state)
+        elif oversampling == 'ncr':
+            smote = NeighbourhoodCleaningRule(kind_sel="all", n_neighbors=4, sampling_strategy = 'majority')
 
 
             #    print("train data before shape", train_data.shape, train_label.shape, type(train_data))
@@ -111,4 +120,73 @@ def data_load_mysplit(n_splits=3, all_set=None,
 
     return train_set,val_set, test_set, train_data.shape[1], all_set
 
+
+def data_load_kfold(n_splits=5, all_set=None,
+        random_state=12, ensemble=False, oversampling='none'):
+    '''
+        oversampling : 'none', 'smote'
+    '''
+    if all_set is None:
+        all_set = pd.read_excel("./ML용_codingbook_new강화평180709.xls", "All set")
+
+    all_label = pd.get_dummies(all_set["DESAT"]).values #.argmax(axis=1) one hot encoding
+    all_data = all_set.iloc[:, 3:].values.astype(float)
+
+    # TODO: to handle missing features appropriately
+    all_exist = (all_data != 99899).astype(float)
+
+    all_data[all_data == 99899] = 0
+
+    split_criteria = np.where(all_data[:, 48] > 2.5, 1, 0)
+    # Standard normalization
+    all_data, mean, std = normalize(all_data, all_exist)
+
+    train_data, test_data, train_exist, test_exist, train_label, test_label, train_split, _ = \
+        train_test_split(all_data, all_exist, all_label, split_criteria, test_size=0.3,
+            random_state=random_state, shuffle=True, stratify=split_criteria)
+
+
+    # Split data into k fold for k-fold cross validation
+    kf = StratifiedKFold(n_splits, shuffle=True, random_state=random_state) # fixed random state
+
+
+    kf_gen = kf.split(train_data, train_split) #ASA score
+
+    def k_folds():
+        for train_ind, val_ind in kf_gen:
+            fold_train = (train_data[train_ind], train_exist[train_ind],
+                    train_label[train_ind])
+            fold_val = (train_data[val_ind], train_exist[val_ind],
+                train_label[val_ind])
+            fold_val = TensorDataset(*from_numpy(*fold_val))
+
+            if oversampling in ['borderline_smote', 'svm_smote', 'smotenc']:
+                from imblearn.over_sampling import SMOTENC, BorderlineSMOTE, SVMSMOTE
+                if oversampling == 'borderline_smote':
+                    smote = BorderlineSMOTE(random_state=random_state)
+                elif oversampling == 'svm_smote':
+                    smote = SVMSMOTE(random_state=random_state)
+                elif oversampling == 'smotenc':
+                    categorical_features = [2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+                            20, 24, 25, 26, 31, 47, 49, 50, 51, 52, 53, 54, 56, 57, 58] + [1, 48]
+                    smote = SMOTENC(categorical_features=categorical_features,
+                            random_state=random_state, sampling_strategy='auto', neighbors=5,
+                            )
+                X, y = smote.fit_resample(fold_train[0], fold_train[2].argmax(axis=1))
+                y = np.array([[1, 0],[0, 1]])[y]
+                exist = np.ones_like(X)
+
+                fold_train = (X, exist, y)
+
+            pos_weight =  fold_train[2].shape[0] / np.sum(fold_train[2][:, 1]) - 1
+
+
+            fold_train = TensorDataset(*from_numpy(*fold_train))
+
+            yield fold_train, fold_val, pos_weight
+
+    print(test_data.shape, test_exist.shape, test_label.shape)
+    test_set = TensorDataset(torch.from_numpy(test_data),
+            torch.from_numpy(test_exist), torch.from_numpy(test_label))
+    return k_folds(), test_set, train_data.shape[1], all_set
 
